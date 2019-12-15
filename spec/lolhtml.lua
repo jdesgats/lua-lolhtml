@@ -60,10 +60,12 @@ describe("lolhtml rewriter", function()
   describe("document content handlers", function()
     test("doctype handler", function()
       local data, buf = nil, sink_buffer()
+      local kept_ref
       local builder = lolhtml.new_rewriter_builder()
         :add_document_content_handlers{
           doctype_handler = function(doctype)
             data = { doctype:get_name(), doctype:get_id(), doctype:get_system_id() }
+            kept_ref = doctype
           end
         }
 
@@ -75,6 +77,10 @@ describe("lolhtml rewriter", function()
       assert_equal(data[2], nil)
       assert_equal(data[3], nil)
       assert_equal(buf:value(), basic_page)
+
+      -- now try to use the doctype object outside of the callback
+      assert_not_nil(kept_ref)
+      assert_error(function() kept_ref:get_name() end)
 
       local full_doctype = [[
         <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"
@@ -145,6 +151,19 @@ describe("lolhtml rewriter", function()
         assert_false(before_removing)
         assert_true(after_removing)
       end)
+
+      test("usage after lifetime", function()
+        local c
+        run_parser("hello, <!-- comment -->", function(comment) c=comment end)
+
+        assert_error(function() c:get_text() end)
+        assert_error(function() c:set_text("foo") end)
+        assert_error(function() c:before("foo") end)
+        assert_error(function() c:after("foo") end)
+        assert_error(function() c:replace("foo") end)
+        assert_error(function() c:remove() end)
+        assert_error(function() c:is_removed() end)
+      end)
     end)
 
     describe("text chunk handler", function()
@@ -208,17 +227,35 @@ describe("lolhtml rewriter", function()
         end)
         assert_equal(out, "Hello, <em></em>!")
       end)
+
+      test("usage after lifetime", function()
+        local c
+        run_parser("hello, <em>World</em>!", function(chunk) c=chunk end)
+
+        assert_error(function() c:get_text() end)
+        assert_error(function() c:is_last_in_text_node() end)
+        assert_error(function() c:before("foo") end)
+        assert_error(function() c:after("foo") end)
+        assert_error(function() c:replace("foo") end)
+        assert_error(function() c:remove() end)
+        assert_error(function() c:is_removed() end)
+      end)
     end)
 
     test("docuemnt end", function()
       local buf = sink_buffer()
+      local ref
       local builder = lolhtml.new_rewriter_builder()
         :add_document_content_handlers{
-          doc_end_handler = function(doc_end) doc_end:append("bye...") end,
+          doc_end_handler = function(doc_end)
+            doc_end:append("bye...")
+            ref = doc_end
+          end,
         }
       local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
       assert(rewriter:write(basic_page):close())
       assert_equal(buf:value(), basic_page .. "bye...")
+      assert_error(function() ref:append("foo") end)
     end)
 
     test("multiple handlers", function()
@@ -241,22 +278,88 @@ describe("lolhtml rewriter", function()
       for _, callback in ipairs { "doctype_handler", "comment_handler", "text_handler" } do
         test(callback, function()
           local buf = sink_buffer()
+          local error_object = {} -- do not throw a string here, otherwise the Lua runtime will decorate it
           local builder = lolhtml.new_rewriter_builder()
             :add_document_content_handlers{
-              [callback] = function() error("boom") end
+              [callback] = function() error(error_object) end
             }
           local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
-          assert(rewriter:write(basic_page):close())
-          assert_equal(buf:value(), basic_page)
+          local ok, err = rewriter:write(basic_page)
+          assert_nil(ok)
+          assert_equal(err, error_object)
+          -- the result should be a subset of the page we fed
+          assert_equal(basic_page:find(buf:value(), 1, true), 1)
+
+          -- now try do interact again with the rewriter, it should raise errors
+          -- (and not crash, preferably)
+          assert_nil(rewriter:write("foo"))
+          assert_nil(rewriter:close())
         end)
       end
+
+      test("doc_end", function()
+          local buf = sink_buffer()
+          local error_object = {} -- do not throw a string here, otherwise the Lua runtime will decorate it
+          local builder = lolhtml.new_rewriter_builder()
+            :add_document_content_handlers{
+              doc_end_handler = function() error(error_object) end
+            }
+          local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
+          assert(rewriter:write(basic_page))
+          local ok, err = rewriter:close()
+          assert_nil(ok)
+          assert_equal(err, error_object)
+          -- the result should be a subset of the page we fed
+          assert_equal(basic_page:find(buf:value(), 1, true), 1)
+      end)
     end)
-    test("keep references to objects", function()
-    end)
-    test("stop processing", function()
+
+
+    describe("callback return values", function()
+      local function run(val)
+        local builder = lolhtml.new_rewriter_builder()
+          :add_document_content_handlers {
+            text_handler = function(chunk) return val end
+          }
+        local buf = sink_buffer()
+        local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
+        local ok, err = rewriter:write("foo<em>bar</em><em>baz</em>")
+        return rewriter, ok, err, buf
+      end
+
+      test("continue", function()
+        local rewriter, ok, err, buf = run(lolhtml.CONTINUE)
+        assert_equal(ok, rewriter) -- no error: return self
+        assert_equal(rewriter:close(), rewriter)
+        assert_equal(buf:value(), "foo<em>bar</em><em>baz</em>")
+      end)
+
+      for testcase, val in pairs {
+        ["stop"] = lolhtml.STOP,
+        ["other numbers"] = 42,
+        ["wrong type"] = {}
+      } do
+        test(testcase, function()
+          local rewriter, ok, err, buf = run(val)
+          assert_nil(ok)
+          assert_type(err, "string")
+          -- keep using the rewriter will result in errors
+          assert_nil(rewriter:write("foo"))
+          assert_nil(rewriter:close())
+        end)
+      end
     end)
   end)
 
   test("write after close", function()
+    local buf = sink_buffer()
+    local rewriter = lolhtml.new_rewriter {
+      builder=lolhtml.new_rewriter_builder(),
+      sink = buf,
+    }
+
+    assert(rewriter:write("hello, "))
+    assert(rewriter:close())
+    assert_nil(rewriter:write("world"))
   end)
 end)

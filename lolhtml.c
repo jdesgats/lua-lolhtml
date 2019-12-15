@@ -2,6 +2,7 @@
 #include <lauxlib.h>
 #include <lol_html.h>
 #include <stdint.h>
+#include <assert.h>
 
 #define PREFIX "lolhtml."
 
@@ -40,9 +41,9 @@ static int push_last_error(lua_State *L) {
     return 2;
 }
 
-/* checks a function result code and prepares a method reutrn to Lua:
- * if zero, shrik the stack to 1 (the slef argument) and returns 1
- * otherwise, pushes nil and the error message and retuns 2
+/* checks a function result code and prepares a method return to Lua:
+ * if zero, shrink the stack to 1 (the self argument) and returns 1
+ * otherwise, pushes nil and the error message and returns 2
  */
 static int return_self_or_err(lua_State *L, int rc) {
     if (rc != 0) {
@@ -52,21 +53,51 @@ static int return_self_or_err(lua_State *L, int rc) {
     return 1;
 }
 
-/* document content handlers callbacks */
-static void init_document_content_callback(handler_data_t *handler) {
-    lua_getfield(handler->L, LUA_REGISTRYINDEX, LOL_REGISTRY); /* reg */
-    lua_rawgeti(handler->L, -1, handler->builder_index);       /* reg, ud */
-    lua_getuservalue(handler->L, -1);                          /* reg, ud, uv */
-    lua_rawgeti(handler->L, -1, handler->callback_index);      /* reg, ud, uv, cb */
-    lua_replace(handler->L, -4);                               /* cb, ud, uv */
-    lua_pop(handler->L, 2);                                    /* cb */
+/* helper function used for rewriter builder callbacks where the userdata is a
+ * pointer to a pointer. These objects should not be used outside of the
+ * callback but nothing prevents the Lua code to keep references around. These
+ * references are NULL'd after the callback so this helper can detect this and
+ * throw regular errors.
+ *
+ * Note: the `void *` should be `void**` but this would require explicit casts
+ * all over the place.
+ */
+static void* check_valid_udata(lua_State *L, int arg, const char *tname) {
+    void **ptr = luaL_checkudata(L, arg, tname);
+    if (*ptr == NULL) {
+        luaL_argerror(L, arg, "attempt to use a value past its lifetime");
+    }
+    return ptr;
 }
 
-static lol_html_rewriter_directive_t call_document_content_callback(lua_State *L) {
+/* document content handlers callbacks */
+static lol_html_rewriter_directive_t
+do_document_content_callback(const char *param_type, void *param, handler_data_t *handler) {
     lol_html_rewriter_directive_t directive;
+    lua_State *L = handler->L;
 
-    // TODO: pcall
-    lua_call(L, 1, 1);
+    /* locate the handler to call */
+    lua_getfield(L, LUA_REGISTRYINDEX, LOL_REGISTRY); /* reg */
+    lua_rawgeti(L, -1, handler->builder_index);       /* reg, ud */
+    lua_getuservalue(L, -1);                          /* reg, ud, uv */
+    lua_rawgeti(L, -1, handler->callback_index);      /* reg, ud, uv, cb */
+    lua_replace(L, -4);                               /* cb, ud, uv */
+    lua_pop(L, 2);                                    /* cb */
+
+    /* allocate the parameter object */
+    void **lua_param = lua_newuserdata(handler->L, sizeof(void *));
+    luaL_getmetatable(L, param_type);
+    lua_setmetatable(L, -2);
+    *lua_param = param;
+
+    int rc = lua_pcall(L, 1, 1, 0);
+    *lua_param = NULL; /* signals that this value cannot be used anymore */
+    if (rc != LUA_OK) {
+        /* in case of error, just leave the error on the stack, the calling
+         * site will check if the stack level changed and assume an error
+         * happened if it did */
+        return LOL_HTML_STOP;
+    }
 
     switch (lua_type(L, -1)) {
     case LUA_TNIL: /* no return value => assume continue */
@@ -75,98 +106,63 @@ static lol_html_rewriter_directive_t call_document_content_callback(lua_State *L
     case LUA_TNUMBER: {
         int isnum;
         lua_Integer result = lua_tointegerx(L, -1, &isnum);
-        if (!isnum) goto error;
-        switch (result) {
-        case LOL_HTML_CONTINUE:
-        case LOL_HTML_STOP:
+        if (!isnum) goto type_error;
+        if (result == LOL_HTML_CONTINUE || result == LOL_HTML_STOP) {
             directive = result;
-            break;
-        default: goto error;
-        }
+        } else goto type_error;
+        break;
     }
-    default: goto error;
+    default: goto type_error;
     }
 
+    lua_pop(L, 1); /* pop the function result */
     return directive;
 
-error:
-    // TODO: is it safe to throw errors here?
-    // probably shold stop processing and return an error afterwards
-    luaL_error(L, "invalid return value");
-    return LOL_HTML_STOP; /* never actually reached */
+type_error:
+    lua_pop(L, 1); /* pop the function result */
+    lua_pushliteral(L, "invalid content handler return");
+    return LOL_HTML_STOP;
 }
 
 static lol_html_rewriter_directive_t
 doctype_handler(lol_html_doctype_t *doctype, void *user_data)
 {
-    handler_data_t *handler = user_data;
-    init_document_content_callback((handler_data_t*) user_data);
-
-    lol_html_doctype_t **lua_doctype = lua_newuserdata(handler->L, sizeof(lol_html_doctype_t *));
-    luaL_getmetatable(handler->L, PREFIX "doctype");
-    lua_setmetatable(handler->L, -2);
-    *lua_doctype = doctype;
-
-    return call_document_content_callback(handler->L);
+    return do_document_content_callback(PREFIX "doctype", doctype, user_data);
 }
 
 static lol_html_rewriter_directive_t
 comment_handler(lol_html_comment_t *comment, void *user_data)
 {
-    handler_data_t *handler = user_data;
-    init_document_content_callback((handler_data_t*) user_data);
-
-    lol_html_comment_t **lua_comment = lua_newuserdata(handler->L, sizeof(lol_html_comment_t *));
-    luaL_getmetatable(handler->L, PREFIX "comment");
-    lua_setmetatable(handler->L, -2);
-    *lua_comment = comment;
-
-    return call_document_content_callback(handler->L);
+    return do_document_content_callback(PREFIX "comment", comment, user_data);
 }
 
 static lol_html_rewriter_directive_t
 text_chunk_handler(lol_html_text_chunk_t *chunk, void *user_data)
 {
-    handler_data_t *handler = user_data;
-    init_document_content_callback((handler_data_t*) user_data);
-
-    lol_html_text_chunk_t **lua_text_chunk = lua_newuserdata(handler->L, sizeof(lol_html_text_chunk_t *));
-    luaL_getmetatable(handler->L, PREFIX "text_chunk");
-    lua_setmetatable(handler->L, -2);
-    *lua_text_chunk = chunk;
-
-    return call_document_content_callback(handler->L);
+    return do_document_content_callback(PREFIX "text_chunk", chunk, user_data);
 }
 
 static lol_html_rewriter_directive_t
 doc_end_handler(lol_html_doc_end_t *doc_end, void *user_data)
 {
-    handler_data_t *handler = user_data;
-    init_document_content_callback((handler_data_t*) user_data);
-
-    lol_html_doc_end_t **lua_doc_end = lua_newuserdata(handler->L, sizeof(lol_html_doc_end_t *));
-    luaL_getmetatable(handler->L, PREFIX "doc_end");
-    lua_setmetatable(handler->L, -2);
-    *lua_doc_end = doc_end;
-
-    return call_document_content_callback(handler->L);
+    return do_document_content_callback(PREFIX "doc_end", doc_end, user_data);
 }
 
 /* doctype */
 static int doctype_get_name(lua_State *L) {
-    const lol_html_doctype_t **doctype = luaL_checkudata(L, 1, PREFIX "doctype");
+    const lol_html_doctype_t **doctype = check_valid_udata(L, 1, PREFIX "doctype");
     push_lol_str_maybe(L, lol_html_doctype_name_get(*doctype));
     return 1;
 }
 
 static int doctype_get_id(lua_State *L) {
-    const lol_html_doctype_t **doctype = luaL_checkudata(L, 1, PREFIX "doctype");
+    const lol_html_doctype_t **doctype = check_valid_udata(L, 1, PREFIX "doctype");
     push_lol_str_maybe(L, lol_html_doctype_public_id_get(*doctype));
     return 1;
 }
 
 static int doctype_get_system_id(lua_State *L) {
-    const lol_html_doctype_t **doctype = luaL_checkudata(L, 1, PREFIX "doctype");
+    const lol_html_doctype_t **doctype = check_valid_udata(L, 1, PREFIX "doctype");
     push_lol_str_maybe(L, lol_html_doctype_system_id_get(*doctype));
     return 1;
 }
@@ -180,7 +176,7 @@ static luaL_Reg doctype_methods[] = {
 
 /* comment */
 static int comment_get_text(lua_State *L) {
-    const lol_html_comment_t **comment = luaL_checkudata(L, 1, PREFIX "comment");
+    const lol_html_comment_t **comment = check_valid_udata(L, 1, PREFIX "comment");
     lol_html_str_t text = lol_html_comment_text_get(*comment); // TODO: free?
     lua_pushlstring(L, text.data, text.len);
     return 1;
@@ -188,14 +184,14 @@ static int comment_get_text(lua_State *L) {
 
 static int comment_set_text(lua_State *L) {
     size_t text_len;
-    lol_html_comment_t **comment = luaL_checkudata(L, 1, PREFIX "comment");
+    lol_html_comment_t **comment = check_valid_udata(L, 1, PREFIX "comment");
     const char *text = luaL_checklstring(L, 2, &text_len);
     return return_self_or_err(L, lol_html_comment_text_set(*comment, text, text_len));
 }
 
 static int comment_before(lua_State *L) {
     size_t content_len;
-    lol_html_comment_t **comment = luaL_checkudata(L, 1, PREFIX "comment");
+    lol_html_comment_t **comment = check_valid_udata(L, 1, PREFIX "comment");
     const char *content = luaL_checklstring(L, 2, &content_len);
     bool is_html = lua_toboolean(L, 3);
     return return_self_or_err(L, lol_html_comment_before(*comment, content, content_len, is_html));
@@ -203,7 +199,7 @@ static int comment_before(lua_State *L) {
 
 static int comment_after(lua_State *L) {
     size_t content_len;
-    lol_html_comment_t **comment = luaL_checkudata(L, 1, PREFIX "comment");
+    lol_html_comment_t **comment = check_valid_udata(L, 1, PREFIX "comment");
     const char *content = luaL_checklstring(L, 2, &content_len);
     bool is_html = lua_toboolean(L, 3);
     return return_self_or_err(L, lol_html_comment_after(*comment, content, content_len, is_html));
@@ -211,20 +207,20 @@ static int comment_after(lua_State *L) {
 
 static int comment_replace(lua_State *L) {
     size_t content_len;
-    lol_html_comment_t **comment = luaL_checkudata(L, 1, PREFIX "comment");
+    lol_html_comment_t **comment = check_valid_udata(L, 1, PREFIX "comment");
     const char *content = luaL_checklstring(L, 2, &content_len);
     bool is_html = lua_toboolean(L, 3);
     return return_self_or_err(L, lol_html_comment_replace(*comment, content, content_len, is_html));
 }
 
 static int comment_remove(lua_State *L) {
-    lol_html_comment_t **comment = luaL_checkudata(L, 1, PREFIX "comment");
+    lol_html_comment_t **comment = check_valid_udata(L, 1, PREFIX "comment");
     lol_html_comment_remove(*comment);
     return return_self_or_err(L, 0); /* cannot fail */
 }
 
 static int comment_is_removed(lua_State *L) {
-    lol_html_comment_t **comment = luaL_checkudata(L, 1, PREFIX "comment");
+    lol_html_comment_t **comment = check_valid_udata(L, 1, PREFIX "comment");
     lua_pushboolean(L, lol_html_comment_is_removed(*comment));
     return 1;
 }
@@ -243,21 +239,21 @@ static luaL_Reg comment_methods[] = {
 
 /* text_chunk */
 static int text_chunk_get_text(lua_State *L) {
-    const lol_html_text_chunk_t **chunk = luaL_checkudata(L, 1, PREFIX "text_chunk");
+    const lol_html_text_chunk_t **chunk = check_valid_udata(L, 1, PREFIX "text_chunk");
     lol_html_text_chunk_content_t content = lol_html_text_chunk_content_get(*chunk);
     lua_pushlstring(L, content.data, content.len);
     return 1;
 }
 
 static int text_chunk_is_last_in_text_node(lua_State *L) {
-    const lol_html_text_chunk_t **chunk = luaL_checkudata(L, 1, PREFIX "text_chunk");
+    const lol_html_text_chunk_t **chunk = check_valid_udata(L, 1, PREFIX "text_chunk");
     lua_pushboolean(L, lol_html_text_chunk_is_last_in_text_node(*chunk));
     return 1;
 }
 
 static int text_chunk_before(lua_State *L) {
     size_t content_len;
-    lol_html_text_chunk_t **chunk = luaL_checkudata(L, 1, PREFIX "text_chunk");
+    lol_html_text_chunk_t **chunk = check_valid_udata(L, 1, PREFIX "text_chunk");
     const char *content = luaL_checklstring(L, 2, &content_len);
     bool is_html = lua_toboolean(L, 3);
     return return_self_or_err(L, lol_html_text_chunk_before(*chunk, content, content_len, is_html));
@@ -265,7 +261,7 @@ static int text_chunk_before(lua_State *L) {
 
 static int text_chunk_after(lua_State *L) {
     size_t content_len;
-    lol_html_text_chunk_t **chunk = luaL_checkudata(L, 1, PREFIX "text_chunk");
+    lol_html_text_chunk_t **chunk = check_valid_udata(L, 1, PREFIX "text_chunk");
     const char *content = luaL_checklstring(L, 2, &content_len);
     bool is_html = lua_toboolean(L, 3);
     return return_self_or_err(L, lol_html_text_chunk_after(*chunk, content, content_len, is_html));
@@ -273,20 +269,20 @@ static int text_chunk_after(lua_State *L) {
 
 static int text_chunk_replace(lua_State *L) {
     size_t content_len;
-    lol_html_text_chunk_t **chunk = luaL_checkudata(L, 1, PREFIX "text_chunk");
+    lol_html_text_chunk_t **chunk = check_valid_udata(L, 1, PREFIX "text_chunk");
     const char *content = luaL_checklstring(L, 2, &content_len);
     bool is_html = lua_toboolean(L, 3);
     return return_self_or_err(L, lol_html_text_chunk_replace(*chunk, content, content_len, is_html));
 }
 
 static int text_chunk_remove(lua_State *L) {
-    lol_html_text_chunk_t **chunk = luaL_checkudata(L, 1, PREFIX "text_chunk");
+    lol_html_text_chunk_t **chunk = check_valid_udata(L, 1, PREFIX "text_chunk");
     lol_html_text_chunk_remove(*chunk);
     return return_self_or_err(L, 0); /* cannot fail */
 }
 
 static int text_chunk_is_removed(lua_State *L) {
-    const lol_html_text_chunk_t **chunk = luaL_checkudata(L, 1, PREFIX "text_chunk");
+    const lol_html_text_chunk_t **chunk = check_valid_udata(L, 1, PREFIX "text_chunk");
     lua_pushboolean(L, lol_html_text_chunk_is_removed(*chunk));
     return 1;
 }
@@ -306,7 +302,7 @@ static luaL_Reg text_chunk_methods[] = {
 /* doc_end */
 static int doc_end_append(lua_State *L) {
     size_t content_len;
-    lol_html_doc_end_t **doc_end = luaL_checkudata(L, 1, PREFIX "doc_end");
+    lol_html_doc_end_t **doc_end = check_valid_udata(L, 1, PREFIX "doc_end");
     const char *content = luaL_checklstring(L, 2, &content_len);
     bool is_html = lua_toboolean(L, 3);
     return return_self_or_err(L, lol_html_doc_end_append(*doc_end, content, content_len, is_html));
@@ -423,11 +419,13 @@ typedef struct {
 static void sink_callback(const char *chunk, size_t chunk_len, void *user_data) {
     lua_rewriter_t *rewriter = user_data;
     lua_checkstack(rewriter->L, 4);
-    lua_getfield(rewriter->L, LUA_REGISTRYINDEX, LOL_REGISTRY);
-    lua_rawgeti(rewriter->L, -1, rewriter->reg_idx);
-    lua_getuservalue(rewriter->L, -1);
-    lua_pushlstring(rewriter->L, chunk, chunk_len);
-    lua_call(rewriter->L, 1, 0);
+    lua_getfield(rewriter->L, LUA_REGISTRYINDEX, LOL_REGISTRY); /* reg */
+    lua_rawgeti(rewriter->L, -1, rewriter->reg_idx);            /* reg, rewriter */
+    lua_getuservalue(rewriter->L, -1);                          /* reg, rewriter, cb */
+    lua_pushlstring(rewriter->L, chunk, chunk_len);             /* reg, rewriter, cb, chunk */
+    // TODO: pcall
+    lua_call(rewriter->L, 1, 0);                                /* reg, rewriter */
+    lua_pop(rewriter->L, 2);
 }
 
 static int rewriter_new(lua_State *L) {
@@ -501,21 +499,77 @@ static int rewriter_new(lua_State *L) {
     return 1; 
 }
 
+static int return_self_or_stack_error(lua_State *L, int rc, int prev_top, lol_html_rewriter_t **rewriter) {
+    if (rc == 0) {
+        assert(lua_gettop(L) == prev_top);
+        lua_settop(L, 1);
+        return 1;
+    }
+
+    /* the rewriter is broken: free it now and leave a NULL pointer to signal
+     * that */
+    lol_html_rewriter_free(*rewriter);
+    *rewriter = NULL;
+
+    /* error case: if the Lua stack moved, that was a Lua runtime error, and
+     * the error value is at the top of the stack already, otherwise it is a
+     * lolhtml error */
+    if (lua_gettop(L) == prev_top) {
+        /* lolhtml error */
+        return push_last_error(L);
+    }
+
+    /* Lua runtime error */
+    lua_pushnil(L);
+    lua_pushvalue(L, -2);
+    return 2;
+}
+
 static int rewriter_write(lua_State *L) {
+    const char *chunk;
     size_t chunk_len;
+    int top, rc;
+
     lol_html_rewriter_t **rewriter = luaL_checkudata(L, 1, PREFIX "rewriter");
-    const char *chunk = luaL_checklstring(L, 2, &chunk_len);
-    return return_self_or_err(L, lol_html_rewriter_write(*rewriter, chunk, chunk_len));
+    if (*rewriter == NULL) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "broken rewriter");
+        return 2;
+    }
+
+    chunk = luaL_checklstring(L, 2, &chunk_len);
+    top = lua_gettop(L);
+    rc = lol_html_rewriter_write(*rewriter, chunk, chunk_len);
+    return return_self_or_stack_error(L, rc, top, rewriter);
 }
 
 static int rewriter_end(lua_State *L) {
+    int top, rc;
+
     lol_html_rewriter_t **rewriter = luaL_checkudata(L, 1, PREFIX "rewriter");
-    return return_self_or_err(L, lol_html_rewriter_end(*rewriter));
+    if (*rewriter == NULL) {
+        lua_pushnil(L);
+        lua_pushliteral(L, "broken rewriter");
+        return 2;
+    }
+    top = lua_gettop(L);
+    rc = lol_html_rewriter_end(*rewriter);
+
+    /* destroy it anyway, otherwise calling the rewriter again will abort */
+    if (rc == 0) {
+        lol_html_rewriter_free(*rewriter);
+        *rewriter = NULL;
+    }
+
+    return return_self_or_stack_error(L, rc, top, rewriter);
 }
 
 static int rewriter_destroy(lua_State *L) {
     lol_html_rewriter_t **rewriter = luaL_checkudata(L, 1, PREFIX "rewriter");
-    lol_html_rewriter_free(*rewriter);
+    if (*rewriter != NULL) {
+        lol_html_rewriter_free(*rewriter);
+        *rewriter = NULL;
+    }
     return 0;
 }
 

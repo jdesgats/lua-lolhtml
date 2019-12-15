@@ -1,6 +1,7 @@
 #include <lua.h>
 #include <lauxlib.h>
 #include <lol_html.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <assert.h>
 
@@ -19,25 +20,26 @@ typedef struct {
     int callback_index;
 } handler_data_t;
 
-/* fallback in case lol_html_take_last_error fails */
-static lol_html_str_t default_err = {
-    .data = "unknown error",
-    .len = sizeof("unknown error"),
-};
-
-static void push_lol_str_maybe(lua_State *L, const lol_html_str_t *s) {
+static void push_lol_str_maybe(lua_State *L, lol_html_str_t *s) {
     if (s == NULL) {
         lua_pushnil(L);
     } else {
         lua_pushlstring(L, s->data, s->len);
+        lol_html_str_free(*s);
+        free(s);
     }
 }
 
 static int push_last_error(lua_State *L) {
     lol_html_str_t *err = lol_html_take_last_error();
-    if (err == NULL) err = &default_err;
     lua_pushnil(L);
-    lua_pushlstring(L, err->data, err->len);
+    if (err == NULL) {
+        lua_pushliteral(L, "unknown error");
+    } else {
+        lua_pushlstring(L, err->data, err->len);
+        lol_html_str_free(*err);
+        free(err);
+    }
     return 2;
 }
 
@@ -179,6 +181,7 @@ static int comment_get_text(lua_State *L) {
     const lol_html_comment_t **comment = check_valid_udata(L, 1, PREFIX "comment");
     lol_html_str_t text = lol_html_comment_text_get(*comment); // TODO: free?
     lua_pushlstring(L, text.data, text.len);
+    lol_html_str_free(text);
     return 1;
 }
 

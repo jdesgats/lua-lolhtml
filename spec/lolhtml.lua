@@ -68,6 +68,7 @@ describe("lolhtml rewriter", function()
             kept_ref = doctype
           end
         }
+      collectgarbage("collect") -- loose the ref to the handler function
 
       local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
       assert(rewriter:write(basic_page))
@@ -106,6 +107,7 @@ describe("lolhtml rewriter", function()
         local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
         assert(rewriter:write(input))
         assert(rewriter:close())
+        collectgarbage("collect") -- loose the ref to the handler and builder
         return buf:value()
       end
 
@@ -176,6 +178,7 @@ describe("lolhtml rewriter", function()
         local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
         assert(rewriter:write(input))
         assert(rewriter:close())
+        collectgarbage("collect") -- loose the ref to the handler and builder
         return buf:value()
       end
 
@@ -252,6 +255,7 @@ describe("lolhtml rewriter", function()
             ref = doc_end
           end,
         }
+      collectgarbage("collect") -- loose the ref to the handler function
       local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
       assert(rewriter:write(basic_page):close())
       assert_equal(buf:value(), basic_page .. "bye...")
@@ -268,6 +272,7 @@ describe("lolhtml rewriter", function()
           doctype_handler = function() table.insert(calls, "doctype") end,
           doc_end_handler = function() table.insert(calls, "doc_end 2") end
         }
+      collectgarbage("collect") -- loose the ref to the handler function
       local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
       assert(rewriter:write(basic_page):close())
       assert_equal(buf:value(), basic_page)
@@ -283,6 +288,7 @@ describe("lolhtml rewriter", function()
             :add_document_content_handlers{
               [callback] = function() error(error_object) end
             }
+          collectgarbage("collect") -- loose the ref to the handler function
           local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
           local ok, err = rewriter:write(basic_page)
           assert_nil(ok)
@@ -304,6 +310,7 @@ describe("lolhtml rewriter", function()
             :add_document_content_handlers{
               doc_end_handler = function() error(error_object) end
             }
+          collectgarbage("collect") -- loose the ref to the handler function
           local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
           assert(rewriter:write(basic_page))
           local ok, err = rewriter:close()

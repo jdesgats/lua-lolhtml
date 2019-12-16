@@ -14,6 +14,12 @@
  */
 #define LOL_REGISTRY (PREFIX "weakreg")
 
+/* rewriter uservalue indices */
+/* note: for now the uservalue is a Lua table with numeric indices, but Lua 5.4
+ * allows multiple user values, that should be more efficient */
+#define REWRITER_CALLBACK_INDEX 1
+#define REWRITER_BUILDER_INDEX 2
+
 typedef struct {
     lua_State *L;
     int builder_index;
@@ -424,11 +430,12 @@ static void sink_callback(const char *chunk, size_t chunk_len, void *user_data) 
     lua_checkstack(rewriter->L, 4);
     lua_getfield(rewriter->L, LUA_REGISTRYINDEX, LOL_REGISTRY); /* reg */
     lua_rawgeti(rewriter->L, -1, rewriter->reg_idx);            /* reg, rewriter */
-    lua_getuservalue(rewriter->L, -1);                          /* reg, rewriter, cb */
-    lua_pushlstring(rewriter->L, chunk, chunk_len);             /* reg, rewriter, cb, chunk */
+    lua_getuservalue(rewriter->L, -1);                          /* reg, rewriter, uv */
+    lua_rawgeti(rewriter->L, -1, REWRITER_CALLBACK_INDEX);      /* reg, rewriter, uv, cb */
+    lua_pushlstring(rewriter->L, chunk, chunk_len);             /* reg, rewriter, uv, cb, chunk */
     // TODO: pcall
-    lua_call(rewriter->L, 1, 0);                                /* reg, rewriter */
-    lua_pop(rewriter->L, 2);
+    lua_call(rewriter->L, 1, 0);                                /* reg, rewriter, uv */
+    lua_pop(rewriter->L, 3);
 }
 
 static int rewriter_new(lua_State *L) {
@@ -443,7 +450,7 @@ static int rewriter_new(lua_State *L) {
     /* the error messages for the luaL_opt* functions are not great in this case */
     lua_getfield(L, 1, "builder");
     lol_html_rewriter_builder_t **builder = luaL_checkudata(L, -1, PREFIX "builder");
-    lua_pop(L, 1);
+    /* keep the builder on the stack */
 
     lua_getfield(L, 1, "encoding");
     encoding = luaL_optlstring(L, -1, "utf-8", &encoding_len);
@@ -471,7 +478,7 @@ static int rewriter_new(lua_State *L) {
         lua_pop(L, 1);
     }
 
-    rewriter = lua_newuserdata(L, sizeof(lua_rewriter_t)); /* cb, ud */
+    rewriter = lua_newuserdata(L, sizeof(lua_rewriter_t)); /* builder, cb, ud */
     rewriter->L = L;
     rewriter->rewriter = lol_html_rewriter_build(
         *builder,
@@ -487,17 +494,21 @@ static int rewriter_new(lua_State *L) {
 
     // keep a reference of the rewriter in the weak registry to retrieve the
     // reference later on
-    lua_getfield(L, LUA_REGISTRYINDEX, LOL_REGISTRY); /* cb, ud, reg */
-    lua_pushvalue(L, -2);                             /* cb, ud, reg, ud */
-    rewriter->reg_idx = luaL_ref(L, -2);              /* cb, ud, reg */
-    lua_pop(L, 1);                                    /* cb, ud */
+    lua_getfield(L, LUA_REGISTRYINDEX, LOL_REGISTRY); /* builder, cb, ud, reg */
+    lua_pushvalue(L, -2);                             /* builder, cb, ud, reg, ud */
+    rewriter->reg_idx = luaL_ref(L, -2);              /* builder, cb, ud, reg */
+    lua_pop(L, 1);                                    /* builder, cb, ud */
 
-    // attach the callback function
-    lua_pushvalue(L, -2);                             /* cb, ud, cb */
-    lua_setuservalue(L, -2);                          /* cb, ud */
+    /* attach the buidler and handler functions to the userdata */
+    lua_createtable(L, 2, 0);                         /* builder, cb, ud, uv */
+    lua_pushvalue(L, -3);                             /* builder, cb, ud, uv, cb */
+    lua_rawseti(L, -2, REWRITER_CALLBACK_INDEX);      /* builder, cb, ud, uv */
+    lua_pushvalue(L, -4);                             /* builder, cb, ud, uv, builder */
+    lua_rawseti(L, -2, REWRITER_BUILDER_INDEX);       /* builder, cb, ud, uv */
+    lua_setuservalue(L, -2);                          /* builder, cb, ud */
 
-    luaL_getmetatable(L, PREFIX "rewriter");          /* cb, ud, mt */
-    lua_setmetatable(L, -2);                          /* cb, ud */
+    luaL_getmetatable(L, PREFIX "rewriter");          /* builder, cb, ud, mt */
+    lua_setmetatable(L, -2);                          /* builder, cb, ud */
 
     return 1; 
 }

@@ -385,6 +385,8 @@ static handler_data_t* create_handler(lua_State *L, int builder_idx, int cb_tabl
         lua_pop(L, 3);                                                        /* func */
         return handler;
     } else {
+        // TODO: throw error if the handler is not a function
+        // TODO: what about __call? allow everything and hope for the best?
         lua_pop(L, 1);
         return NULL;
     }
@@ -393,7 +395,7 @@ static handler_data_t* create_handler(lua_State *L, int builder_idx, int cb_tabl
 static int rewriter_builder_add_document_content_handlers(lua_State *L) {
     void *doctype_ud, *comment_ud, *text_ud, *doc_end_ud;
 
-    lol_html_rewriter_builder_t **ud = luaL_checkudata(L, 1, PREFIX "builder");
+    lol_html_rewriter_builder_t **builder = luaL_checkudata(L, 1, PREFIX "builder");
     luaL_checktype(L, 2, LUA_TTABLE);
     doctype_ud = create_handler(L, 1, 2, "doctype_handler");
     comment_ud = create_handler(L, 1, 2, "comment_handler");
@@ -401,7 +403,7 @@ static int rewriter_builder_add_document_content_handlers(lua_State *L) {
     doc_end_ud = create_handler(L, 1, 2, "doc_end_handler");
 
     lol_html_rewriter_builder_add_document_content_handlers(
-            *ud,
+            *builder,
             (doctype_ud == NULL) ? NULL : doctype_handler, doctype_ud,
             (comment_ud == NULL) ? NULL : comment_handler, comment_ud,
             (text_ud == NULL) ? NULL : text_chunk_handler, text_ud,
@@ -412,8 +414,36 @@ static int rewriter_builder_add_document_content_handlers(lua_State *L) {
     return 1;
 }
 
+static int rewriter_builder_add_element_content_handlers(lua_State *L) {
+    void *comment_ud, *text_ud;
+    const lol_html_selector_t **selector;
+    int rc;
+
+    lol_html_rewriter_builder_t **builder = luaL_checkudata(L, 1, PREFIX "builder");
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    /* get selector, and anchor it to the builder */
+    lua_getuservalue(L, 1);
+    lua_getfield(L, 2, "selector");
+    selector = luaL_checkudata(L, -1, PREFIX "selector");
+    luaL_ref(L, -2);
+    lua_pop(L, 1);
+
+    comment_ud = create_handler(L, 1, 2, "comment_handler");
+    text_ud = create_handler(L, 1, 2, "text_handler");
+
+    rc = lol_html_rewriter_builder_add_element_content_handlers(
+            *builder, *selector,
+            NULL, NULL, // TODO: element
+            (comment_ud == NULL) ? NULL : comment_handler, comment_ud,
+            (text_ud == NULL) ? NULL : text_chunk_handler, text_ud);
+
+    return return_self_or_err(L, rc);
+}
+
 static luaL_Reg rewriter_builder_methods[] = {
     { "add_document_content_handlers", rewriter_builder_add_document_content_handlers },
+    { "add_element_content_handlers", rewriter_builder_add_element_content_handlers },
     { NULL, NULL }
 };
 
@@ -593,10 +623,39 @@ static luaL_Reg rewriter_methods[] = {
     { NULL, NULL }
 };
 
+/* selectors */
+/** Selectors don't have any methods, they are only exposed for the sake of
+ * efficiency, as it might avoid parsing many times the same selector for
+ * different builders.
+ */
+static int selector_new(lua_State *L) {
+    size_t len;
+    const char *src = luaL_checklstring(L, 1, &len);
+    lol_html_selector_t *selector = lol_html_selector_parse(src, len);
+
+    if (selector == NULL) {
+        return push_last_error(L);
+    }
+
+    lol_html_selector_t **lua_selector = lua_newuserdata(L, sizeof(lol_html_selector_t *));
+    *lua_selector = selector;
+    luaL_getmetatable(L, PREFIX "selector");
+    lua_setmetatable(L, -2);
+
+    return 1;
+}
+
+static int selector_destroy(lua_State *L) {
+    lol_html_selector_t **lua_selector = luaL_checkudata(L, 1, PREFIX "selector");
+    lol_html_selector_free(*lua_selector);
+    return 0;
+}
+
 /* top level module */
 static luaL_Reg module_functions[] = {
     { "new_rewriter_builder", rewriter_builder_new },
     { "new_rewriter", rewriter_new },
+    { "new_selector", selector_new },
     { NULL, NULL }
 };
 
@@ -627,6 +686,11 @@ int luaopen_lolhtml(lua_State *L) {
     luaL_setfuncs(L, rewriter_methods, 0);
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, rewriter_destroy);
+    lua_setfield(L, -2, "__gc");
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, PREFIX "selector");
+    lua_pushcfunction(L, selector_destroy);
     lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 

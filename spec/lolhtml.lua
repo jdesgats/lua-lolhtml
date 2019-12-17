@@ -369,4 +369,52 @@ describe("lolhtml rewriter", function()
     assert(rewriter:close())
     assert_nil(rewriter:write("world"))
   end)
+
+  test("sink throw errors", function()
+  end)
+
+  test("selector syntax errors", function()
+    local ok, err = lolhtml.new_selector("foo[attr=")
+    assert_nil(ok)
+    assert_type(err, "string")
+  end)
+
+  describe("element content handlers", function()
+    -- comment/text are the samie as the document handlers, so minimal testing is done
+    test("comment_handler", function()
+      local buf = sink_buffer()
+      local builder = lolhtml.new_rewriter_builder()
+        :add_element_content_handlers{
+          selector = lolhtml.new_selector("strong"),
+          comment_handler = function(comment)
+            assert_equal(comment:get_text(), " name ")
+            comment:set_text(" World ")
+          end,
+        }
+      collectgarbage("collect")
+      local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
+      assert(rewriter:write("<!--before -->hello, <strong><!-- name --></strong><!-- after -->"))
+      assert(rewriter:close())
+      assert_equal(buf:value(), "<!--before -->hello, <strong><!-- World --></strong><!-- after -->")
+    end)
+
+    test("text_handler", function()
+      local buf = sink_buffer()
+      local builder = lolhtml.new_rewriter_builder()
+        :add_element_content_handlers{
+          selector = lolhtml.new_selector("strong"),
+          text_handler = function(text)
+            -- this handler might be called multiple times
+            if text:get_text() == "name" then
+              text:replace("World")
+            end
+          end,
+        }
+      collectgarbage("collect")
+      local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
+      assert(rewriter:write("hello, <strong>name</strong>"))
+      assert(rewriter:close())
+      assert_equal(buf:value(), "hello, <strong>World</strong>")
+    end)
+  end)
 end)

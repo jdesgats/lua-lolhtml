@@ -416,5 +416,150 @@ describe("lolhtml rewriter", function()
       assert(rewriter:close())
       assert_equal(buf:value(), "hello, <strong>World</strong>")
     end)
+
+    describe("element_handler", function()
+      local function run_parser(sel, input, cb)
+        local buf = sink_buffer()
+        local builder = lolhtml.new_rewriter_builder()
+          :add_element_content_handlers{
+            selector = lolhtml.new_selector(sel),
+            element_handler = cb,
+          }
+        local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
+        assert(rewriter:write(input))
+        assert(rewriter:close())
+        collectgarbage("collect") -- loose the ref to the handler and builder
+        return buf:value()
+      end
+
+      test("get_tag_name/get_namespace_uri", function()
+        local called = 0
+        local out = run_parser("h1", basic_page, function(el)
+          called = called + 1
+          assert_equal(el:get_tag_name(), "h1")
+          assert_type(el:get_namespace_uri(), "string")
+        end)
+
+        assert_equal(1, called)
+        assert_equal(out, basic_page)
+      end)
+
+      test("get_attribute/has_attribute", function()
+        local called = 0
+        local out = run_parser("a", '<em>hello</em>, <a href="http://example.com">World</a>!', function(el)
+          called = called + 1
+          assert_true(el:has_attribute("href"))
+          assert_equal(el:get_attribute("href"), "http://example.com")
+          assert_false(el:has_attribute("foo"))
+          assert_nil(el:get_attribute("foo"))
+        end)
+        assert_equal(1, called)
+        assert_equal(out, '<em>hello</em>, <a href="http://example.com">World</a>!')
+      end)
+
+      test("set_attribute", function()
+        local out = run_parser("a", '<em>hello</em>, <a href="http://example.com">World</a>!', function(el)
+          assert_not_nil(el:set_attribute("href", "https://example.com"))
+          assert_not_nil(el:set_attribute("target", "_blank"))
+        end)
+
+        -- XXX: the position of new attributes is kind of an implementation detail, so this might break easily
+        assert_equal(out, '<em>hello</em>, <a href="https://example.com" target="_blank">World</a>!')
+      end)
+
+      test("remove attribute", function()
+        local out = run_parser("a", '<em target="foo">hello</em>, <a href="http://example.com" target="_blank">World</a>!', 
+        function(el)
+          assert_not_nil(el:remove_attribute("target"))
+          assert_not_nil(el:remove_attribute("foo")) -- removing non-existant element should "work"
+        end)
+        assert_equal(out, '<em target="foo">hello</em>, <a href="http://example.com">World</a>!')
+      end)
+
+      local test_table = {
+        { method="before", is_html="<em>hello</em>, <TEST><b>World</b>!", no_html="<em>hello</em>, &lt;TEST&gt;<b>World</b>!" },
+        { method="after", is_html="<em>hello</em>, <b>World</b><TEST>!", no_html="<em>hello</em>, <b>World</b>&lt;TEST&gt;!" },
+        { method="prepend", is_html="<em>hello</em>, <b><TEST>World</b>!", no_html="<em>hello</em>, <b>&lt;TEST&gt;World</b>!" },
+        { method="append", is_html="<em>hello</em>, <b>World<TEST></b>!", no_html="<em>hello</em>, <b>World&lt;TEST&gt;</b>!" },
+        { method="set_inner_content", is_html="<em>hello</em>, <b><TEST></b>!", no_html="<em>hello</em>, <b>&lt;TEST&gt;</b>!" },
+        { method="replace", is_html="<em>hello</em>, <TEST>!", no_html="<em>hello</em>, &lt;TEST&gt;!" },
+      }
+
+      for _, testcase in ipairs(test_table) do
+        test(testcase.method .. " is_html=true", function()
+          local out = run_parser("b", '<em>hello</em>, <b>World</b>!', function(el)
+            el[testcase.method](el, "<TEST>", true)
+          end)
+          assert_equal(out, testcase.is_html)
+        end)
+        test(testcase.method .. " is_html=false", function()
+          local out = run_parser("b", '<em>hello</em>, <b>World</b>!', function(el)
+            el[testcase.method](el, "<TEST>", false)
+          end)
+          assert_equal(out, testcase.no_html)
+        end)
+      end
+
+      test("remove", function()
+        local out = run_parser("b", '<em>hello</em>, <b>World</b>!', function(el)
+          assert_false(el:is_removed())
+          assert_not_nil(el:remove())
+          assert_true(el:is_removed())
+        end)
+        assert_equal(out, '<em>hello</em>, !')
+      end)
+
+      test("remove_and_keep_content", function()
+        local out = run_parser("b", '<em>hello</em>, <b>World</b>!', function(el)
+          assert_false(el:is_removed())
+          assert_not_nil(el:remove_and_keep_content())
+          assert_true(el:is_removed())
+        end)
+        assert_equal(out, '<em>hello</em>, World!')
+      end)
+
+      test("attributes", function()
+        local called = 0
+        run_parser("a", '<em target="foo">hello</em>, <a href="http://example.com" target="_blank">World</a>!',
+        function(el)
+          local it = 0
+          called = called + 1
+          for name, value in el:attributes() do
+            it = it + 1
+            if it == 1 then
+              assert_equal(name, "href")
+              assert_equal(value, "http://example.com")
+            elseif it == 2 then
+              assert_equal(name, "target")
+              assert_equal(value, "_blank")
+            else
+              error("more than 2 iterations")
+            end
+          end
+        end)
+        assert_equal(called, 1)
+      end)
+
+      test("usage after lifetime", function()
+        local el
+        run_parser("b", '<em>hello</em>, <b>World</b>!', function(e) el=e end)
+        assert_error(function() el:get_tag_name() end)
+        assert_error(function() el:get_namespace_uri() end)
+        assert_error(function() el:get_attribute("foo") end)
+        assert_error(function() el:has_attribute("foo") end)
+        assert_error(function() el:set_attribute("foo", "bar") end)
+        assert_error(function() el:remove_attribute("foo") end)
+        assert_error(function() el:attributes() end)
+        assert_error(function() el:before("foo") end)
+        assert_error(function() el:after("foo") end)
+        assert_error(function() el:prepend("foo") end)
+        assert_error(function() el:append("foo") end)
+        assert_error(function() el:set_inner_content("foo") end)
+        assert_error(function() el:replace("foo") end)
+        assert_error(function() el:is_removed() end)
+        assert_error(function() el:remove() end)
+        assert_error(function() el:remove_and_keep_content() end)
+      end)
+    end)
   end)
 end)

@@ -156,6 +156,12 @@ doc_end_handler(lol_html_doc_end_t *doc_end, void *user_data)
     return do_document_content_callback(PREFIX "doc_end", doc_end, user_data);
 }
 
+static lol_html_rewriter_directive_t
+element_handler(lol_html_element_t *element, void *user_data)
+{
+    return do_document_content_callback(PREFIX "element", element, user_data);
+}
+
 /* doctype */
 static int doctype_get_name(lua_State *L) {
     const lol_html_doctype_t **doctype = check_valid_udata(L, 1, PREFIX "doctype");
@@ -322,6 +328,194 @@ static luaL_Reg doc_end_methods[] = {
     { NULL, NULL }
 };
 
+/* element */
+static int element_get_tag_name(lua_State *L) {
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    lol_html_str_t tag_name = lol_html_element_tag_name_get(*el);
+    lua_pushlstring(L, tag_name.data, tag_name.len);
+    lol_html_str_free(tag_name);
+    return 1;
+}
+
+static int element_get_namespace_uri(lua_State *L) {
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    lua_pushstring(L, lol_html_element_namespace_uri_get(*el)); // TODO: can it return nil?
+    return 1;
+}
+
+static int element_get_attribute(lua_State *L) {
+    size_t len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *attr = luaL_checklstring(L, 2, &len);
+    push_lol_str_maybe(L, lol_html_element_get_attribute(*el, attr, len));
+    return 1;
+}
+
+static int element_has_attribute(lua_State *L) {
+    size_t len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *attr = luaL_checklstring(L, 2, &len);
+    int rc = lol_html_element_has_attribute(*el, attr, len);
+    if (rc < 0) {
+        return push_last_error(L);
+    }
+
+    lua_pushboolean(L, rc);
+    return 1;
+}
+
+static int element_set_attribute(lua_State *L) {
+    size_t attr_len, value_len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *attr = luaL_checklstring(L, 2, &attr_len);
+    const char *value = luaL_checklstring(L, 3, &value_len);
+    return return_self_or_err(L, lol_html_element_set_attribute(
+                *el, attr, attr_len, value, value_len));
+}
+
+static int element_remove_attribute(lua_State *L) {
+    size_t len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *attr = luaL_checklstring(L, 2, &len);
+    return return_self_or_err(L, lol_html_element_remove_attribute(*el, attr, len));
+}
+
+static int attribute_iterator_next(lua_State *L) {
+    lol_html_str_t s;
+    lol_html_attributes_iterator_t **it = check_valid_udata(L, 1, PREFIX "attribute_iterator");
+    const lol_html_attribute_t *attr = lol_html_attributes_iterator_next(*it);
+
+    if (attr == NULL) {
+        /* end of the attributes: eagerly free the iterator */
+        lol_html_attributes_iterator_free(*it);
+        *it = NULL;
+        lua_pushnil(L);
+        return 1;
+    }
+
+    s = lol_html_attribute_name_get(attr);
+    lua_pushlstring(L, s.data, s.len);
+    lol_html_str_free(s);
+
+    s = lol_html_attribute_value_get(attr);
+    lua_pushlstring(L, s.data, s.len);
+    lol_html_str_free(s);
+
+    return 2;
+}
+
+static int attribute_iterator_destroy(lua_State *L) {
+    lol_html_attributes_iterator_t **it = luaL_checkudata(L, 1, PREFIX "attribute_iterator");
+    if (*it != NULL) {
+        lol_html_attributes_iterator_free(*it);
+        *it = NULL;
+    }
+    return 0;
+}
+
+static int element_attributes(lua_State *L) {
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+
+    lua_pushcfunction(L, attribute_iterator_next);
+
+    /* We have to use a full userdata as we need to reliably GC the iterator if
+     * the program breaks early from the loop. */
+    lol_html_attributes_iterator_t **it = lua_newuserdata(L, sizeof(void*));
+    luaL_getmetatable(L, PREFIX "attribute_iterator");
+    lua_setmetatable(L, -2);
+    *it = lol_html_attributes_iterator_get(*el);
+
+    lua_pushnil(L);
+    return 3;
+}
+
+static int element_before(lua_State *L) {
+    size_t len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *text = luaL_checklstring(L, 2, &len);
+    bool is_html = lua_toboolean(L, 3);
+    return return_self_or_err(L, lol_html_element_before(*el, text, len, is_html));
+}
+
+static int element_after(lua_State *L) {
+    size_t len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *text = luaL_checklstring(L, 2, &len);
+    bool is_html = lua_toboolean(L, 3);
+    return return_self_or_err(L, lol_html_element_after(*el, text, len, is_html));
+}
+
+static int element_prepend(lua_State *L) {
+    size_t len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *text = luaL_checklstring(L, 2, &len);
+    bool is_html = lua_toboolean(L, 3);
+    return return_self_or_err(L, lol_html_element_prepend(*el, text, len, is_html));
+}
+
+static int element_append(lua_State *L) {
+    size_t len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *text = luaL_checklstring(L, 2, &len);
+    bool is_html = lua_toboolean(L, 3);
+    return return_self_or_err(L, lol_html_element_append(*el, text, len, is_html));
+}
+
+static int element_set_inner_content(lua_State *L) {
+    size_t len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *text = luaL_checklstring(L, 2, &len);
+    bool is_html = lua_toboolean(L, 3);
+    return return_self_or_err(L, lol_html_element_set_inner_content(*el, text, len, is_html));
+}
+
+static int element_replace(lua_State *L) {
+    size_t len;
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    const char *text = luaL_checklstring(L, 2, &len);
+    bool is_html = lua_toboolean(L, 3);
+    return return_self_or_err(L, lol_html_element_replace(*el, text, len, is_html));
+}
+
+static int element_is_removed(lua_State *L) {
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    lua_pushboolean(L, lol_html_element_is_removed(*el));
+    return 1;
+}
+
+static int element_remove(lua_State *L) {
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    lol_html_element_remove(*el);
+    return return_self_or_err(L, 0); /* cannot fail */
+}
+
+static int element_remove_and_keep_content(lua_State *L) {
+    lol_html_element_t **el = check_valid_udata(L, 1, PREFIX "element");
+    lol_html_element_remove_and_keep_content(*el);
+    return return_self_or_err(L, 0); /* cannot fail */
+}
+
+static luaL_Reg element_methods[] = {
+    { "get_tag_name", element_get_tag_name },
+    { "get_namespace_uri", element_get_namespace_uri },
+    { "get_attribute", element_get_attribute },
+    { "has_attribute", element_has_attribute },
+    { "set_attribute", element_set_attribute },
+    { "remove_attribute", element_remove_attribute },
+    { "attributes", element_attributes },
+    { "before", element_before },
+    { "after", element_after },
+    { "prepend", element_prepend },
+    { "append", element_append },
+    { "set_inner_content", element_set_inner_content },
+    { "replace", element_replace },
+    { "is_removed", element_is_removed },
+    { "remove", element_remove },
+    { "remove_and_keep_content", element_remove_and_keep_content },
+    { NULL, NULL }
+};
+
+
 /* rewriter builder */
 /* note: as there is a dynamic number of callbacks, the userdata for the builder
  * is just a boxed pointer with a table as uservalue.
@@ -415,7 +609,7 @@ static int rewriter_builder_add_document_content_handlers(lua_State *L) {
 }
 
 static int rewriter_builder_add_element_content_handlers(lua_State *L) {
-    void *comment_ud, *text_ud;
+    void *comment_ud, *text_ud, *element_ud;
     const lol_html_selector_t **selector;
     int rc;
 
@@ -431,10 +625,11 @@ static int rewriter_builder_add_element_content_handlers(lua_State *L) {
 
     comment_ud = create_handler(L, 1, 2, "comment_handler");
     text_ud = create_handler(L, 1, 2, "text_handler");
+    element_ud = create_handler(L, 1, 2, "element_handler");
 
     rc = lol_html_rewriter_builder_add_element_content_handlers(
             *builder, *selector,
-            NULL, NULL, // TODO: element
+            (element_ud == NULL) ? NULL : element_handler, element_ud,
             (comment_ud == NULL) ? NULL : comment_handler, comment_ud,
             (text_ud == NULL) ? NULL : text_chunk_handler, text_ud);
 
@@ -716,6 +911,17 @@ int luaopen_lolhtml(lua_State *L) {
     lua_newtable(L);
     luaL_setfuncs(L, doc_end_methods, 0);
     lua_setfield(L, -2, "__index");
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, PREFIX "element");
+    lua_newtable(L);
+    luaL_setfuncs(L, element_methods, 0);
+    lua_setfield(L, -2, "__index");
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, PREFIX "attribute_iterator");
+    lua_pushcfunction(L, attribute_iterator_destroy);
+    lua_setfield(L, -2, "__gc");
     lua_pop(L, 1);
 
     /* module functions */

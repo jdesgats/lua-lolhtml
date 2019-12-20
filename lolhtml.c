@@ -19,6 +19,7 @@
  * allows multiple user values, that should be more efficient */
 #define REWRITER_CALLBACK_INDEX 1
 #define REWRITER_BUILDER_INDEX 2
+#define REWRITER_ERROR_INDEX 3
 
 typedef struct {
     lua_State *L;
@@ -191,7 +192,7 @@ static luaL_Reg doctype_methods[] = {
 /* comment */
 static int comment_get_text(lua_State *L) {
     const lol_html_comment_t **comment = check_valid_udata(L, 1, PREFIX "comment");
-    lol_html_str_t text = lol_html_comment_text_get(*comment); // TODO: free?
+    lol_html_str_t text = lol_html_comment_text_get(*comment);
     lua_pushlstring(L, text.data, text.len);
     lol_html_str_free(text);
     return 1;
@@ -648,18 +649,32 @@ typedef struct {
     lol_html_rewriter_t *rewriter;
     lua_State *L;
     int reg_idx;
+    bool broken; /* used to signal sink errors */
 } lua_rewriter_t;
 
 static void sink_callback(const char *chunk, size_t chunk_len, void *user_data) {
+    int rc;
     lua_rewriter_t *rewriter = user_data;
+    if (rewriter->broken) {
+        return;
+    }
+
     lua_checkstack(rewriter->L, 4);
     lua_getfield(rewriter->L, LUA_REGISTRYINDEX, LOL_REGISTRY); /* reg */
     lua_rawgeti(rewriter->L, -1, rewriter->reg_idx);            /* reg, rewriter */
     lua_getuservalue(rewriter->L, -1);                          /* reg, rewriter, uv */
     lua_rawgeti(rewriter->L, -1, REWRITER_CALLBACK_INDEX);      /* reg, rewriter, uv, cb */
     lua_pushlstring(rewriter->L, chunk, chunk_len);             /* reg, rewriter, uv, cb, chunk */
-    // TODO: pcall
-    lua_call(rewriter->L, 1, 0);                                /* reg, rewriter, uv */
+    rc = lua_pcall(rewriter->L, 1, 0, 0);                       /* reg, rewriter, uv, err? */
+
+    if (rc != LUA_OK) {                                         /* reg, rewriter, uv, err */
+        /* at this point, the lol-html API does not allow to abort the
+         * processing straight away, so we have to let it continue until the
+         * end. However the Lua handler will not be called again. */
+        lua_rawseti(rewriter->L, -2, REWRITER_ERROR_INDEX);     /* reg, rewriter, uv */
+        rewriter->broken = 1;
+    }
+
     lua_pop(rewriter->L, 3);
 }
 
@@ -705,6 +720,7 @@ static int rewriter_new(lua_State *L) {
 
     rewriter = lua_newuserdata(L, sizeof(lua_rewriter_t)); /* builder, cb, ud */
     rewriter->L = L;
+    rewriter->broken = 0;
     rewriter->rewriter = lol_html_rewriter_build(
         *builder,
         encoding, encoding_len,
@@ -738,17 +754,27 @@ static int rewriter_new(lua_State *L) {
     return 1; 
 }
 
-static int return_self_or_stack_error(lua_State *L, int rc, int prev_top, lol_html_rewriter_t **rewriter) {
+static int return_self_or_stack_error(lua_State *L, int rc, int prev_top, lua_rewriter_t *rewriter) {
     if (rc == 0) {
         assert(lua_gettop(L) == prev_top);
-        lua_settop(L, 1);
-        return 1;
+
+        if (!rewriter->broken) {
+            /* all good */
+            lua_settop(L, 1);
+            return 1;
+        }
+
+        /* rc == 0 but rewriter->broken: the sink threw an error.
+         * Fetch the error and leave it on top of the stack */
+        lua_getuservalue(L, 1);
+        lua_rawgeti(L, -1, REWRITER_ERROR_INDEX);
+        assert(!lua_isnil(L, -1));
     }
 
     /* the rewriter is broken: free it now and leave a NULL pointer to signal
      * that */
-    lol_html_rewriter_free(*rewriter);
-    *rewriter = NULL;
+    lol_html_rewriter_free(rewriter->rewriter);
+    rewriter->rewriter = NULL;
 
     /* error case: if the Lua stack moved, that was a Lua runtime error, and
      * the error value is at the top of the stack already, otherwise it is a
@@ -769,8 +795,8 @@ static int rewriter_write(lua_State *L) {
     size_t chunk_len;
     int top, rc;
 
-    lol_html_rewriter_t **rewriter = luaL_checkudata(L, 1, PREFIX "rewriter");
-    if (*rewriter == NULL) {
+    lua_rewriter_t *rewriter = luaL_checkudata(L, 1, PREFIX "rewriter");
+    if (rewriter->rewriter == NULL) {
         lua_pushnil(L);
         lua_pushliteral(L, "broken rewriter");
         return 2;
@@ -778,36 +804,36 @@ static int rewriter_write(lua_State *L) {
 
     chunk = luaL_checklstring(L, 2, &chunk_len);
     top = lua_gettop(L);
-    rc = lol_html_rewriter_write(*rewriter, chunk, chunk_len);
+    rc = lol_html_rewriter_write(rewriter->rewriter, chunk, chunk_len);
     return return_self_or_stack_error(L, rc, top, rewriter);
 }
 
 static int rewriter_end(lua_State *L) {
     int top, rc;
 
-    lol_html_rewriter_t **rewriter = luaL_checkudata(L, 1, PREFIX "rewriter");
-    if (*rewriter == NULL) {
+    lua_rewriter_t *rewriter = luaL_checkudata(L, 1, PREFIX "rewriter");
+    if (rewriter->rewriter == NULL) {
         lua_pushnil(L);
         lua_pushliteral(L, "broken rewriter");
         return 2;
     }
     top = lua_gettop(L);
-    rc = lol_html_rewriter_end(*rewriter);
+    rc = lol_html_rewriter_end(rewriter->rewriter);
 
     /* destroy it anyway, otherwise calling the rewriter again will abort */
     if (rc == 0) {
-        lol_html_rewriter_free(*rewriter);
-        *rewriter = NULL;
+        lol_html_rewriter_free(rewriter->rewriter);
+        rewriter->rewriter = NULL;
     }
 
     return return_self_or_stack_error(L, rc, top, rewriter);
 }
 
 static int rewriter_destroy(lua_State *L) {
-    lol_html_rewriter_t **rewriter = luaL_checkudata(L, 1, PREFIX "rewriter");
-    if (*rewriter != NULL) {
-        lol_html_rewriter_free(*rewriter);
-        *rewriter = NULL;
+    lua_rewriter_t *rewriter = luaL_checkudata(L, 1, PREFIX "rewriter");
+    if (rewriter->rewriter != NULL) {
+        lol_html_rewriter_free(rewriter->rewriter);
+        rewriter->rewriter = NULL;
     }
     return 0;
 }

@@ -29,7 +29,6 @@ end
 
 describe("lolhtml rewriter", function()
   after(function()
-    print("GC....")
     collectgarbage("collect")
   end)
 
@@ -371,6 +370,26 @@ describe("lolhtml rewriter", function()
   end)
 
   test("sink throw errors", function()
+    local called = false
+    local error_object = {}
+    local rewriter = lolhtml.new_rewriter {
+      builder=lolhtml.new_rewriter_builder(),
+      sink = function()
+        called = true
+        error(error_object)
+      end
+    }
+
+    -- XXX: hard to tell when the error will be thrown (at the :write call
+    -- or at the :close). If this test breaks, it might be because of an
+    -- internal change in lol-html
+    local ok, err = rewriter:write("hello, world")
+    assert_true(called)
+    assert_nil(ok)
+    assert_equal(err, error_object)
+    local ok, err = rewriter:close()
+    assert_nil(ok)
+    assert_equal(err, "broken rewriter")
   end)
 
   test("selector syntax errors", function()

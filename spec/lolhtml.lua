@@ -579,6 +579,53 @@ describe("lolhtml rewriter", function()
         assert_error(function() el:remove() end)
         assert_error(function() el:remove_and_keep_content() end)
       end)
+
+      test("multiple selectors", function()
+        local buf = sink_buffer()
+        local builder = lolhtml.new_rewriter_builder()
+          :add_element_content_handlers {
+            selector = lolhtml.new_selector("span"),
+            element_handler = function(el)
+              el:set_inner_content("span content")
+            end
+          }
+          :add_element_content_handlers {
+            selector = lolhtml.new_selector("div"),
+            element_handler = function(el)
+              el:set_inner_content("div content")
+            end
+          }
+        local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
+        collectgarbage("collect")
+        assert(rewriter:write("aaa <span>bbb</span> ccc <div>ddd</div> eee <span>fff</span> ggg"))
+        assert(rewriter:close())
+        collectgarbage("collect")
+        assert_equal(buf:value(), "aaa <span>span content</span> ccc <div>div content</div> eee <span>span content</span> ggg")
+      end)
+      test("multiple handlers for the same selector", function()
+        local buf = sink_buffer()
+        local counter = 0
+        local builder = lolhtml.new_rewriter_builder()
+          :add_element_content_handlers {
+            selector = lolhtml.new_selector("span"),
+            element_handler = function(el)
+              el:set_inner_content("span content")
+            end
+          }
+          :add_element_content_handlers {
+            selector = lolhtml.new_selector("span"),
+            element_handler = function(el)
+              counter = counter + 1
+              el:set_attribute("count", tostring(counter))
+            end
+          }
+        local rewriter = lolhtml.new_rewriter { builder=builder, sink=buf }
+        collectgarbage("collect")
+        assert(rewriter:write("aaa <span>bbb</span> ccc <div>ddd</div> eee <span>fff</span> ggg"))
+        assert(rewriter:close())
+        collectgarbage("collect")
+        assert_equal(buf:value(), 'aaa <span count="1">span content</span> ccc <div>ddd</div> eee <span count="2">span content</span> ggg')
+      end)
     end)
   end)
 end)

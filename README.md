@@ -38,7 +38,7 @@ Quick start
 
 The workflow is usually:
 
-1. Create a [*rewriter buidler*](#rewriterbuilder-objects) object:
+1. Create a [*rewriter builder*](#rewriterbuilder-objects) object:
    ```lua
    local lolhtml = require "lolhtml"
    local my_builder = lolhtml.new_rewriter_builder()
@@ -101,14 +101,14 @@ when appropriate. In particular it should not panic (as in triggering
 
 Object constructors:
 
-* `new_selector`: see [Selector](selector-objects)
-* `new_rewriter_builder`: see [RewriterBuilder](#rewriterbuilder-objects)
-* `new_rewriter`: see [Rewriter](#rewriter-objects)
+* `lolhtml.new_selector`: see [`Selector`](#selector-objects)
+* `lolhtml.new_rewriter_builder`: see [`RewriterBuilder`](#rewriterbuilder-objects)
+* `lolhtml.new_rewriter`: see [`Rewriter`](#rewriter-objects)
 
 Constants:
 
-* `CONTINUE`
-* `STOP`
+* `lolhtml.CONTINUE`
+* `lolhtml.STOP`
 
 ### Selector objects
 
@@ -121,8 +121,8 @@ reuse the same selector in multiple builders).
 
 #### `lolhtml.new_selector(sel: string) => Selector | nil, err`
 
-Builds a new `Selector` object out of the give string. Returns `nil, err` in
-case of syntax error.
+Builds a new [`Selector`](#selector-objects) object out of the give string.
+Returns `nil, err` in case of syntax error.
 
 ### RewriterBuilder objects
 
@@ -158,12 +158,13 @@ The `callback` parameter must be a table with callbacks for different types
 of events, the possible fields are:
 
 * `doctype_handler`: called after parsing the Document Type declaration with
-  a `Doctype` object.
-* `comment_handler`: called whenever a comment is parsed with a `Comment`
-  object.
-* `text_handler`: called when text nodes are parsed with a `TextChunk` object.
-* `doc_end_handler`: called at the end of the document with a `DocumentEnd`
-  object.
+  a [`Doctype`](#doctype-objects) object.
+* `comment_handler`: called whenever a comment is parsed with a
+  [`Comment`](#comment-objects) object.
+* `text_handler`: called when text nodes are parsed with a
+  [`TextChunk`](#textchunk-objects) object.
+* `doc_end_handler`: called at the end of the document with a
+  [`DocumentEnd`](#documentend-objects) object.
 
 All of the fields are optional. Calling a callback has a cost so leave out any
 callback you don't need.
@@ -179,10 +180,12 @@ for different types of events, the possible fields are:
 
 * `selector`: the [CSS selector](#selector-objects) to call the callbacks on
   (required)
-* `comment_handler`: called whenever a comment is parsed with a `Comment`
-  object.
-* `text_handler`: called when text nodes are parsed with a `TextChunk` object.
-* `element_handler`: called when an element is parsed with a `Element` object.
+* `comment_handler`: called whenever a comment is parsed with a
+  [`Comment`](#comment-objects) object.
+* `text_handler`: called when text nodes are parsed with a
+  [`TextChunk`](#textchunk-objects) object.
+* `element_handler`: called when an element is parsed with a
+  [`Element`](#element-objects) object.
 
 All of the fields are optional (except `selector`). Calling a callback has a
 cost so leave out any callback you don't need.
@@ -191,7 +194,7 @@ cost so leave out any callback you don't need.
 ### Rewriter objects
 
 Rewriter object are processing a single HTML document and are instantiated with
-a `RewriterBuilder` object.
+a [`RewriterBuilder`](#rewriterbuilder-objects) object.
 
 Each rewriter has an associated `sink`, which is a function called to output
 the rewritten HTML.

@@ -14,19 +14,25 @@ You need a functional setup of Rust and Cargo to be able to build this module.
 Please refer to the [Rust website][rust-install] or install it with your
 distribution's package manager.
 
-Also, be sure to clone the submodules before trying to compile:
+### Luarocks (version >= 3.0 required)
+
+You can install this module with Luarocks:
 
 ```
-git submodule init --recursive
+luarocks install https://raw.githubusercontent.com/jdesgats/lua-lolhtml/master/rockspecs/lolhtml-scm-1.rockspec
 ```
 
-After that, the provided Makefile should be able to compile the module:
+### Manual build
+
+First, be sure to clone this repository with its submodules. Then the provided
+Makefile should be able to build the module.
 
 ```
+git clone --recursive https://github.com/jdesgats/lua-lolhtml.git
 make
 ```
 
-Running the test require [my fork][telescope] of Telescope:
+Running the tests require [my fork][telescope] of Telescope:
 
 ```
 luarocks install https://raw.githubusercontent.com/jdesgats/telescope/master/rockspecs/telescope-scm-1.rockspec
@@ -131,7 +137,7 @@ created at program startup and are used to instantiate many `Rewriter` objects.
 
 All callbacks functions are called with a single argument whose type depend on
 the type of callback. This argument should not outlive the callback and any
-attempt to keep a reference of it to use it later will reeuslt in an error.
+attempt to keep a reference of it to use it later will result in an error.
 
 These functions can return:
 
@@ -306,3 +312,4 @@ end
 [lolhtml-memory]: https://docs.rs/lol_html/0.1.0/lol_html/struct.MemorySettings.html
 [lolhtml-strict]: https://docs.rs/lol_html/0.1.0/lol_html/struct.Settings.html#structfield.stricti
 [rust-install]: https://www.rust-lang.org/tools/install
+[telescope]: https://github.com/jdesgats/telescope

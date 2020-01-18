@@ -10,26 +10,21 @@ on-the-fly.
 Installation
 ------------
 
-You first need to obtain the lolhtml library, either through your package
-repository, or build it with Cargo (Cargo don't support installing libraris as
-far as I know):
+You need a functional setup of Rust and Cargo to be able to build this module.
+Please refer to the [Rust website][rust-install] or install it with your
+distribution's package manager.
+
+Also, be sure to clone the submodules before trying to compile:
 
 ```
-git clone https://github.com/cloudflare/lol-html.git
-cd lol-html/c-api
-cargo build --release --locked
-sudo install -Dm 755 target/release/liblolhtml.so -t "/usr/local/lib"
+git submodule init --recursive
 ```
 
-Then you can build/install the Lua binding:
+After that, the provided Makefile should be able to compile the module:
 
 ```
-gcc -shared -o lolhtml.so -llolhtml -Wall lolhtml.c
-# ** or **
-luarocks install lolhtml
+make
 ```
-
-**Note:** Maybe I'll make a all-in-one library later.
 
 Running the test require [my fork][telescope] of Telescope:
 
@@ -306,4 +301,5 @@ end
 
 [lolhtml]: https://github.com/cloudflare/lol-html
 [lolhtml-memory]: https://docs.rs/lol_html/0.1.0/lol_html/struct.MemorySettings.html
-[lolhtml-strict]: https://docs.rs/lol_html/0.1.0/lol_html/struct.Settings.html#structfield.strict
+[lolhtml-strict]: https://docs.rs/lol_html/0.1.0/lol_html/struct.Settings.html#structfield.stricti
+[rust-install]: https://www.rust-lang.org/tools/install

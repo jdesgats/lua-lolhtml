@@ -19,7 +19,7 @@ distribution's package manager.
 You can install this module with Luarocks:
 
 ```
-luarocks install https://raw.githubusercontent.com/jdesgats/lua-lolhtml/master/rockspecs/lolhtml-scm-1.rockspec
+luarocks install https://raw.githubusercontent.com/jdesgats/lua-lolhtml/master/rockspecs/lolhtml-dev-1.rockspec
 ```
 
 ### Manual build

@@ -10,7 +10,7 @@ description = {
   detailed = [[
   This library is a Lua binding for lol-html, a Low output latency
   streaming HTML parser/rewriter with CSS selector-based API.]],
-  homepage = "https://github.com/jdesgats/lualolhtml",
+  homepage = "https://github.com/jdesgats/lua-lolhtml",
   license = "BSD3"
 }
 dependencies = {

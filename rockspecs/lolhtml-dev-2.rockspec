@@ -1,6 +1,6 @@
 rockspec_format = "3.0"
 package = "lolhtml"
-version = "dev-1"
+version = "dev-2"
 source = {
   url = "git+https://github.com/jdesgats/lua-lolhtml.git"
 }
@@ -13,10 +13,13 @@ description = {
   license = "BSD3"
 }
 dependencies = {
-  "lua ~> 5.3"
+  "lua <= 5.3"
 }
 build = {
   type = "make",
+  build_variables = {
+    CFLAGS = '$(CFLAGS) -I"$(LUA_INCDIR)"';
+  },
   install_pass = false,
   install = {
     lib = { lolhtml="lolhtml.so" },

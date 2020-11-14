@@ -2,8 +2,7 @@ rockspec_format = "3.0"
 package = "lolhtml"
 version = "dev-1"
 source = {
---  url = "git+https://github.com/jdesgats/lua-lolhtml.git"
-  url = "git+ssh://git@github.com:jdesgats/lua-lolhtml.git"
+  url = "git+https://github.com/jdesgats/lua-lolhtml.git"
 }
 description = {
   summary = "HTML parser/rewriter with CSS selector-based API",

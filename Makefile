@@ -17,3 +17,9 @@ lolhtml.so: $(LOLHTML_STATIC_LIB) lolhtml.o
 		   lolhtml.o \
 		   -Wl,--whole-archive $(LOLHTML_STATIC_LIB) \
 		   -Wl,--no-whole-archive
+
+clean:
+	rm -fr lolhtml.o lolhtml.so
+
+distclean: clean
+	cd lol-html/c-api && cargo clean

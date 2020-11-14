@@ -1,5 +1,6 @@
 #include <lua.h>
 #include <lauxlib.h>
+#include <compat-5.3.h>
 #include <lol_html.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -686,7 +687,7 @@ static int rewriter_new(lua_State *L) {
     bool strict;
 
     luaL_checktype(L, 1, LUA_TTABLE);
-    
+
     /* the error messages for the luaL_opt* functions are not great in this case */
     lua_getfield(L, 1, "builder");
     lol_html_rewriter_builder_t **builder = luaL_checkudata(L, -1, PREFIX "builder");
@@ -751,7 +752,7 @@ static int rewriter_new(lua_State *L) {
     luaL_getmetatable(L, PREFIX "rewriter");          /* builder, cb, ud, mt */
     lua_setmetatable(L, -2);                          /* builder, cb, ud */
 
-    return 1; 
+    return 1;
 }
 
 static int return_self_or_stack_error(lua_State *L, int rc, int prev_top, lua_rewriter_t *rewriter) {

@@ -1,3 +1,6 @@
 [submodule "lol-html"]
 	path = lol-html
 	url = https://github.com/cloudflare/lol-html.git
+[submodule "lua-compat-5.3"]
+	path = lua-compat-5.3
+	url = https://github.com/keplerproject/lua-compat-5.3.git
